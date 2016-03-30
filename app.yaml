@@ -1,0 +1,27 @@
+runtime: python27
+api_version: 1
+threadsafe: true
+
+libraries:
+- name: ssl
+  version: latest
+
+handlers:
+- url: /.*
+  script: pubsub.app
+
+#builtins:
+#- appstats: on
+
+env_variables:
+  PROJECT: 'mq-cloud-prototyping'
+  TOPIC: 'topic1'
+  SUBSCRIPTION: 'toTopic1'
+
+
+
+
+
+
+
+
