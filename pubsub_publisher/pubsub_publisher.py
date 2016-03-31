@@ -11,6 +11,7 @@ import string
 import httplib2
 from apiclient import discovery
 from oauth2client import client as oauth2client
+from google.appengine.api.app_identity import get_application_id
 import os
 from published_messages import PublishedMessages
 from message_counter import MessageCounter
@@ -21,6 +22,8 @@ from message_counter import MessageCounter
 
 PUBSUB_SCOPES = ['https://www.googleapis.com/auth/pubsub']
 
+def getOwningProject():
+    return get_application_id()
 
 def getProject():
     return os.environ['PROJECT']
@@ -169,7 +172,7 @@ class PubSubHandler(BaseHandler):
 
         topics = list_topic(project)
        
-        resp = 'ROLE: Publisher   '
+        resp = '%s ROLE: Publisher   ' % getOwningProject()
         resp += 'topics = %s' % str(topics)
         self.response.write(resp)
 

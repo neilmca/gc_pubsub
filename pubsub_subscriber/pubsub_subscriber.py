@@ -13,6 +13,7 @@ from apiclient import discovery
 from oauth2client import client as oauth2client
 from pulled_messages import PulledMessages
 import os
+from google.appengine.api.app_identity import get_application_id
 
 
 #######
@@ -21,8 +22,11 @@ import os
 
 PUBSUB_SCOPES = ['https://www.googleapis.com/auth/pubsub']
 
+def getOwningProject():
+    return get_application_id()
 
-def getProject():
+
+def getProjectContainingTopic():
     return os.environ['PROJECT_CONTAINING_TOPIC']
 
 def getTopicToSubscribeTo():
@@ -60,7 +64,7 @@ client = create_pubsub_client()
 
 
 
-def list_subscriptions(project):
+def list_subscriptions(subscription_project):
     client = create_pubsub_client()
 
     subscriptionsList = []
@@ -68,7 +72,7 @@ def list_subscriptions(project):
     next_page_token = None
     while True:
         resp = client.projects().subscriptions().list(
-            project=buildProjectName(project),
+            project=buildProjectName(subscription_project),
             pageToken=next_page_token).execute()
 
         # Process each subscription
@@ -85,10 +89,10 @@ def list_subscriptions(project):
 
     return subscriptionsList
 
-def check_subscription_exists(project, name):
-    s_list = list_subscriptions(project)
+def check_subscription_exists(subscription_project, name):
+    s_list = list_subscriptions(subscription_project)
 
-    subscriptionName = buildSubscriptionName(project, name)
+    subscriptionName = buildSubscriptionName(subscription_project, name)
     logging.info('check_subscription_exists = %s,  s_list = %s' % (subscriptionName, s_list))
 
     if subscriptionName in s_list:
@@ -97,7 +101,10 @@ def check_subscription_exists(project, name):
     return False
 
 
-def create_subscription(project, topic, sname):
+def create_subscription(subscription_project, topic_project, topic, sname):
+
+    #subscription is owned by this project but can subscribe to a topic in aonther project
+
     client = create_pubsub_client()
     
     
@@ -105,24 +112,24 @@ def create_subscription(project, topic, sname):
     # Create a POST body for the Pub/Sub request
     body = {
         # The name of the topic from which this subscription receives messages
-        'topic': buildTopicName(project, topic)
+        'topic': buildTopicName(topic_project, topic)
     }
 
 
-    subscriptionName = buildSubscriptionName(project, sname)
+    subscriptionName = buildSubscriptionName(subscription_project, sname)
     subscription = client.projects().subscriptions().create(
         name=subscriptionName,
         body=body).execute()
 
     logging.info('Created: %s' % subscription.get('name'))
 
-def subscription_pull_messages(project, sname):
+def subscription_pull_messages(subscription_project, sname):
     client = create_pubsub_client()
 
     # You can fetch multiple messages with a single API call.
     batch_size = 100
 
-    subscription = buildSubscriptionName(project, sname)
+    subscription = buildSubscriptionName(subscription_project, sname)
 
     # Create a POST body for the Pub/Sub request
     body = {
@@ -192,16 +199,17 @@ class PubSubHandler(BaseHandler):
    
     def get(self):
 
-        project = getProject()
+        topic_project = getProjectContainingTopic()
+        subscription_project = getOwningProject()
         topic = getTopicToSubscribeTo()
         subscriptionName = getSubscriptionName()
 
-        if not check_subscription_exists(project, subscriptionName):
-            create_subscription(project, topic, subscriptionName)
+        if not check_subscription_exists(subscription_project, subscriptionName):
+            create_subscription(subscription_project, topic_project, topic, subscriptionName)
 
-        subscriptions = list_subscriptions(project)
+        subscriptions = list_subscriptions(subscription_project)
 
-        resp = 'ROLE: Subscriber   '
+        resp = '%s ROLE: Subscriber   ' % getOwningProject()
         resp += 'subscriptions = %s' % str(subscriptions)
         self.response.write(resp)
 
@@ -213,8 +221,9 @@ class CronPullFromTopicHandler(BaseHandler):
    
     def get(self):
 
+      subscription_project = getOwningProject()
       logging.info('CronPullFromTopicHandler invoked pulling from subscription %s' % getSubscriptionName())
-      subscription_pull_messages(getProject(), getSubscriptionName())     
+      subscription_pull_messages(subscription_project, getSubscriptionName())     
       
 
 
