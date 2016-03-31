@@ -1,1 +1,0 @@
-gcloud preview app deploy --version 2 app.yaml --project mq-cloud-prototyping

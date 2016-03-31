@@ -11,7 +11,9 @@ import string
 import httplib2
 from apiclient import discovery
 from oauth2client import client as oauth2client
+from pulled_messages import PulledMessages
 import os
+
 
 #######
 #NOTE: This does not work on devserver
@@ -20,15 +22,27 @@ import os
 PUBSUB_SCOPES = ['https://www.googleapis.com/auth/pubsub']
 
 
-
 def getProject():
-    return os.environ['PROJECT']
+    return os.environ['PROJECT_CONTAINING_TOPIC']
 
-def getTopic():
-    return os.environ['TOPIC']
+def getTopicToSubscribeTo():
+    return os.environ['TOPIC_TO_SUBSCRIBE_TO']
 
 def getSubscriptionName():
     return os.environ['SUBSCRIPTION']
+
+
+
+def buildTopicName(project, topic):
+    return 'projects/%s/topics/%s' % (project, topic)
+
+def buildSubscriptionName(project, subscription):
+    return 'projects/%s/subscriptions/%s' % (project, subscription)
+
+def buildProjectName(project):
+    return 'projects/%s' % project
+
+
 
 def create_pubsub_client(http=None):
     logging.info('create_pubsub_client')
@@ -43,62 +57,8 @@ def create_pubsub_client(http=None):
 
 client = create_pubsub_client()
 
-def list_topic(project):
 
-    client = create_pubsub_client()
 
-    topics = []
-
-    next_page_token = None
-    while True:
-        resp = client.projects().topics().list(
-            project='projects/%s' % project,
-            pageToken=next_page_token).execute()
-
-        logging.info(str(resp))
-
-        
-        # Process each topic
-        for topic in resp['topics']:
-            logging.info(topic)
-            topics.append(topic['name'])
-        next_page_token = resp.get('nextPageToken')
-        if not next_page_token:
-            break
-
-    return topics
-
-def create_topic(project, name):
-    logging.info('create topic %s' % name)
-    create_pubsub_client().projects().topics().create(
-        name='projects/%s/topics/%s' % (project, name), body={}).execute()
-
-def check_topic_exists(project, name):
-    client = create_pubsub_client()
-    t_list = []
-    next_page_token = None
-    while True:
-        resp = client.projects().topics().list(
-            project='projects/%s' % project,
-            pageToken=next_page_token).execute()
-
-        # Process each topic
-        if 'topics' in resp:
-            for topic in resp['topics']:
-                t_list.append(topic['name'])
-
-        next_page_token = resp.get('nextPageToken')
-        if not next_page_token:
-            break
-
-    topicName='projects/%s/topics/%s' % (project, name)
-    logging.info('check_topic_exists topic = %s,  t_list = %s' % (topicName, t_list))
-
-    
-    if topicName in t_list:
-        return True
-
-    return False
 
 def list_subscriptions(project):
     client = create_pubsub_client()
@@ -108,7 +68,7 @@ def list_subscriptions(project):
     next_page_token = None
     while True:
         resp = client.projects().subscriptions().list(
-            project='projects/%s' % project,
+            project=buildProjectName(project),
             pageToken=next_page_token).execute()
 
         # Process each subscription
@@ -128,7 +88,7 @@ def list_subscriptions(project):
 def check_subscription_exists(project, name):
     s_list = list_subscriptions(project)
 
-    subscriptionName = 'projects/%s/subscriptions/%s' % (project, name)
+    subscriptionName = buildSubscriptionName(project, name)
     logging.info('check_subscription_exists = %s,  s_list = %s' % (subscriptionName, s_list))
 
     if subscriptionName in s_list:
@@ -145,11 +105,11 @@ def create_subscription(project, topic, sname):
     # Create a POST body for the Pub/Sub request
     body = {
         # The name of the topic from which this subscription receives messages
-        'topic': 'projects/%s/topics/%s' % (project, topic)        
+        'topic': buildTopicName(project, topic)
     }
 
 
-    subscriptionName = 'projects/%s/subscriptions/%s' % (project, sname)
+    subscriptionName = buildSubscriptionName(project, sname)
     subscription = client.projects().subscriptions().create(
         name=subscriptionName,
         body=body).execute()
@@ -162,7 +122,7 @@ def subscription_pull_messages(project, sname):
     # You can fetch multiple messages with a single API call.
     batch_size = 100
 
-    subscription = 'projects/%s/subscriptions/%s' % (project, sname)
+    subscription = buildSubscriptionName(project, sname)
 
     # Create a POST body for the Pub/Sub request
     body = {
@@ -185,8 +145,12 @@ def subscription_pull_messages(project, sname):
                 pubsub_message = received_message.get('message')
                 if pubsub_message:
                     # Process messages
-                    logging.info('ack message id = %s' % received_message.get('ackId'))
-                    logging.info( base64.b64decode(str(pubsub_message.get('data'))))
+                    message_id = pubsub_message.get('messageId')
+                    logging.info('received message id = %s' % message_id)
+                    mbody = base64.b64decode(str(pubsub_message.get('data')))
+                    msg = PulledMessages(messageId = message_id, receivedAckd = datetime.datetime.utcnow(), body = mbody)
+                    msg.put()
+
                     # Get the message's ack ID
                     ack_ids.append(received_message.get('ackId'))
 
@@ -199,6 +163,9 @@ def subscription_pull_messages(project, sname):
         else:
             logging.info('received_messages is none')
             break;
+
+
+
 
 class BaseHandler(webapp2.RequestHandler):
     def handle_exception(self, exception, debug):
@@ -226,70 +193,23 @@ class PubSubHandler(BaseHandler):
     def get(self):
 
         project = getProject()
-        topic = getTopic()
+        topic = getTopicToSubscribeTo()
         subscriptionName = getSubscriptionName()
-
-        if not check_topic_exists(project, topic):
-            create_topic(project, topic)
 
         if not check_subscription_exists(project, subscriptionName):
             create_subscription(project, topic, subscriptionName)
 
-
-        topics = list_topic(project)
         subscriptions = list_subscriptions(project)
 
-
-
-
-        resp = 'topics = %s' % str(topics)
-        resp += '   '
+        resp = 'ROLE: Subscriber   '
         resp += 'subscriptions = %s' % str(subscriptions)
         self.response.write(resp)
 
-
-
   
-class CronPublishToTopicHandler(BaseHandler):
-
-    #from experimentation  
-        # time taken to write 1000 entries = 84s
-        # time tkane to write 1,000 enties > 10mins => exceeds the 10min cut off for a task associated to an automatically scaled module.
-   
-    def get(self):
-
-        topicName='projects/%s/topics/%s' % (getProject(), getTopic())
-        logging.info('CronPublishToTopicHandler invoked publishing to topic %s' % topicName)
-
-        client = create_pubsub_client()
-
-        # You need to base64-encode your message.
-        message1 = base64.b64encode('Hello Cloud Pub/Sub!')
-        message2 = base64.b64encode('We are on the same boat.')
-
-        # Create a POST body for the Pub/Sub request
-        body = {
-            'messages': [
-                {'data': message1},
-                {'data': message2},
-            ]
-        }
-
-        
-        resp = client.projects().topics().publish(
-            topic=topicName, body=body).execute()
-
-        message_ids = resp.get('messageIds')
-        if message_ids:
-            for message_id in message_ids:
-                # Process each message ID
-                logging.info('message id = %s' % message_id)
  
 class CronPullFromTopicHandler(BaseHandler):
 
-    #from experimentation  
-        # time taken to write 1000 entries = 84s
-        # time tkane to write 1,000 enties > 10mins => exceeds the 10min cut off for a task associated to an automatically scaled module.
+    
    
     def get(self):
 
@@ -301,7 +221,6 @@ class CronPullFromTopicHandler(BaseHandler):
 logging.getLogger().setLevel(logging.DEBUG)
 
 app = webapp2.WSGIApplication([
-    ('/cron_publishtotopic', CronPublishToTopicHandler),
     ('/cron_pullfromtopic', CronPullFromTopicHandler),
     ('/.*', PubSubHandler)    
     

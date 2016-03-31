@@ -8,15 +8,15 @@ libraries:
 
 handlers:
 - url: /.*
-  script: pubsub.app
+  script: pubsub_publisher.app
 
 #builtins:
 #- appstats: on
 
 env_variables:
-  PROJECT: 'mq-cloud-prototyping'
-  TOPIC: 'topic1'
-  SUBSCRIPTION: 'toTopic1'
+  PROJECT: 'setindeploy'
+  TOPIC: 'setindeploy'
+  
 
 
 

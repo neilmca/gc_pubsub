@@ -1,0 +1,1 @@
+python "C:\Program Files (x86)\Google\Cloud SDK\google-cloud-sdk\platform\google_appengine\appcfg.py" update . -A mq-cloud-prototyping-2 --noauth_local_webserver -V2 -E PROJECT:mq-cloud-prototyping-2 -E TOPIC:topic2

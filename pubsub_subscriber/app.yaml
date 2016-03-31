@@ -1,0 +1,27 @@
+runtime: python27
+api_version: 1
+threadsafe: true
+
+libraries:
+- name: ssl
+  version: latest
+
+handlers:
+- url: /.*
+  script: pubsub_subscriber.app
+
+#builtins:
+#- appstats: on
+
+env_variables:
+  PROJECT_CONTAINING_TOPIC: 'setindeploy'
+  SUBSCRIPTION: 'setindeploy'
+  TOPIC_TO_SUBSCRIBE_TO: 'setindeploy'
+
+
+
+
+
+
+
+
