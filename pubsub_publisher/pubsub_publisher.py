@@ -15,6 +15,7 @@ from google.appengine.api.app_identity import get_application_id
 import os
 from published_messages import PublishedMessages
 from message_counter import MessageCounter
+import json
 
 #######
 #NOTE: This does not work on devserver
@@ -37,6 +38,10 @@ def buildTopicName(project, topic):
 
 def buildProjectName(project):
     return 'projects/%s' % project
+
+def constructJson(body, timestamp, cursor):
+        responseJson = {'body': body,  'timestamp': timestamp, 'cursor': cursor}
+        return json.dumps(responseJson, sort_keys=True, indent=4)
 
 
 def create_pubsub_client(http=None):
@@ -107,8 +112,8 @@ def publish_to_topic(project, topic):
         MessageCounter.writeNewCounter(0)
         cursor = 0
 
-    message1Body = 'Hello Cloud Pub/Sub! idx=%d %s' % (cursor+1, datetime.datetime.utcnow())
-    message2Body = 'We are on the same boat. idx=%d  %s' % (cursor+2, datetime.datetime.utcnow())
+    message1Body = constructJson('Hello Cloud Pub/Sub!', str(datetime.datetime.utcnow()), cursor+1, )
+    message2Body = constructJson('We are on the same boat.', str(datetime.datetime.utcnow()), cursor+2)
 
     message1 = base64.b64encode(message1Body)
     message2 = base64.b64encode(message2Body)

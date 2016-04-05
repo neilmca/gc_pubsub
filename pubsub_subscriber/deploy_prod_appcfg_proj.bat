@@ -1,1 +1,1 @@
-python "C:\Program Files (x86)\Google\Cloud SDK\google-cloud-sdk\platform\google_appengine\appcfg.py" update . -A mq-cloud-prototyping --noauth_local_webserver -V2 -E PROJECT_CONTAINING_TOPIC:mq-cloud-prototyping-2 -E TOPIC_TO_SUBSCRIBE_TO:topic2 -E SUBSCRIPTION:fromProto1ToTopic2
+python "C:\Program Files (x86)\Google\Cloud SDK\google-cloud-sdk\platform\google_appengine\appcfg.py" update . -A mq-cloud-prototyping --noauth_local_webserver -V2

@@ -13,10 +13,7 @@ handlers:
 #builtins:
 #- appstats: on
 
-env_variables:
-  PROJECT_CONTAINING_TOPIC: 'setindeploy'
-  SUBSCRIPTION: 'setindeploy'
-  TOPIC_TO_SUBSCRIBE_TO: 'setindeploy'
+
 
 
 
