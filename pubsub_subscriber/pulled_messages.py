@@ -7,7 +7,9 @@ class PulledMessages(ndb.Model):
     messageId = ndb.StringProperty(indexed=True)
     receivedAckd = ndb.DateTimeProperty(indexed=False)
     body = ndb.StringProperty(indexed=False)
-    subscription = ndb.StringProperty(indexed=True)
+    subscription = ndb.StringProperty(indexed=False)
+    log_summary = ndb.StringProperty(indexed=False)
+    pubsubReceiveLagSecs = ndb.IntegerProperty(indexed=False)
 
 
 

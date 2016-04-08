@@ -6,6 +6,7 @@ import logging
 class Subscriptions(ndb.Model):
     topic_to_subscribe = ndb.StringProperty(indexed=False)
     topic_project = ndb.StringProperty(indexed=False)
+    exclude_filters = ndb.StringProperty(indexed=False)
 
     @staticmethod
     def getSubscriptions():
@@ -30,7 +31,7 @@ class Subscriptions(ndb.Model):
         logging.info('Subscriptions.init')
         subs = Subscriptions.getSubscriptions()
         if subs == None or len(subs) == 0:
-            ds = Subscriptions(topic_project = 'enter name', topic_to_subscribe = 'enter name')
+            ds = Subscriptions(topic_project = 'enter name', topic_to_subscribe = 'enter name', exclude_filters = '')
             ds.put()
 
     

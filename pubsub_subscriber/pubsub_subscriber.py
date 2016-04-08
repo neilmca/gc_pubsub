@@ -15,7 +15,8 @@ from pulled_messages import PulledMessages
 import os
 from google.appengine.api.app_identity import get_application_id
 from subscriptions import Subscriptions
-
+import json
+import math
 
 #######
 #NOTE: This does not work on devserver
@@ -29,11 +30,16 @@ def getOwningProject():
 def buildTopicName(project, topic):
     return 'projects/%s/topics/%s' % (project, topic)
 
-def buildSubscriptionName(project, subscription):
+def buildFullSubscriptionName(project, subscription):
     return 'projects/%s/subscriptions/%s' % (project, subscription)
 
 def buildProjectName(project):
     return 'projects/%s' % project
+
+def buildSubscriptionName(project, topic):
+    return project + '___' + topic
+
+
 
 
 
@@ -81,7 +87,7 @@ def list_subscriptions(subscription_project):
 def check_subscription_exists(subscription_project, name):
     s_list = list_subscriptions(subscription_project)
 
-    subscriptionName = buildSubscriptionName(subscription_project, name)
+    subscriptionName = buildFullSubscriptionName(subscription_project, name)
     logging.info('check_subscription_exists = %s,  s_list = %s' % (subscriptionName, s_list))
 
     if subscriptionName in s_list:
@@ -105,14 +111,14 @@ def create_subscription(subscription_project, topic_project, topic, sname):
     }
 
 
-    subscriptionName = buildSubscriptionName(subscription_project, sname)
+    subscriptionName = buildFullSubscriptionName(subscription_project, sname)
     subscription = client.projects().subscriptions().create(
         name=subscriptionName,
         body=body).execute()
 
     logging.info('Created: %s' % subscription.get('name'))
 
-def subscription_pull_messages(subscription):
+def subscription_pull_messages(subscription, exclude_filters):
     client = create_pubsub_client()
 
     # You can fetch multiple messages with a single API call.
@@ -142,9 +148,15 @@ def subscription_pull_messages(subscription):
                     message_id = pubsub_message.get('messageId')
                     logging.info('received message id = %s' % message_id)
                     mbody = base64.b64decode(str(pubsub_message.get('data')))
-
+                    summary = log_summary(mbody)
                     mbody_aug = PulledMessages.AugmentLoggedJson(mbody, subscription)
-                    msg = PulledMessages(messageId = message_id, receivedAckd = datetime.datetime.utcnow(), body = mbody_aug, subscription = subscription)
+
+                    logging.info('summary = %s' % summary)
+                    log_ts = datetime.datetime.strptime(summary['startTime'], "%Y-%m-%dT%H:%M:%S.%fZ")
+                    ack_ts = datetime.datetime.utcnow()
+                    pubsubReceiveLag = int((ack_ts - log_ts).total_seconds())
+
+                    msg = PulledMessages(messageId = message_id, receivedAckd = ack_ts, body = mbody_aug, log_summary = json.dumps(summary, sort_keys=True, indent=4), subscription = subscription, pubsubReceiveLagSecs = pubsubReceiveLag)
                     msg.put()
 
                     # Get the message's ack ID
@@ -160,6 +172,34 @@ def subscription_pull_messages(subscription):
             logging.info('received_messages is none')
             break;
 
+def log_summary(log_body):
+    status = ''
+    method = ''
+    startTime = ''
+    endTime = ''
+    resource = ''
+    host = ''
+
+    logJson = json.loads(log_body)   
+    if 'protoPayload' in logJson:
+        protop = logJson['protoPayload']
+        if 'status' in protop:
+            status = protop['status']
+        if 'method' in protop:
+            method = protop['method']
+        if 'startTime' in protop:
+            startTime = protop['startTime']
+        if 'endTime' in protop:
+            endTime = protop['endTime']
+        if 'resource' in protop:
+            resource = protop['resource']
+        if 'host' in protop:
+            host = protop['host']
+     
+       
+
+    log_summary = {'status' : status, 'method' : method, 'startTime' : startTime, 'endTime': endTime, 'resource' : resource, 'host' : host}
+    return log_summary
 
 def check_and_create_subscriptions():
 
@@ -171,7 +211,7 @@ def check_and_create_subscriptions():
             topic_project = subs_to_create.topic_project
             subscription_project = getOwningProject()
             topic = subs_to_create.topic_to_subscribe
-            subscriptionName = topic_project + '_' + topic
+            subscriptionName = buildSubscriptionName(topic_project, topic)
                 
             if not check_subscription_exists(subscription_project, subscriptionName):
                 logging.info('creating subscription (%s) to topic %s' % (subscriptionName, buildTopicName(topic_project, topic)))
@@ -181,7 +221,47 @@ def check_and_create_subscriptions():
     else:
         logging.info('no subscriptions to set as names not set in Subscriptions datastore')
 
-    
+def get_exclude_filter_matched_to_subscription(fullSubscriptionToMatch):
+
+    #loop through each DS subscriton entry and see if it matches this one
+    all = Subscriptions.getSubscriptions()
+    for subsDS in all:
+        ds_topic_project = subsDS.topic_project
+        ds_subscription_project = getOwningProject()
+        ds_topic = subsDS.topic_to_subscribe
+        subscriptionName = buildSubscriptionName(ds_topic_project, ds_topic)
+        fullName = buildFullSubscriptionName(ds_subscription_project, subscriptionName)        
+        if fullName == fullSubscriptionToMatch:
+            #match
+            filters = subsDS.exclude_filters.encode('utf8').split(",")
+            return filters
+
+    return []
+
+def exclude_if_matches_filter(status, filters):
+
+    #filters can be explicit or a range example = 201, 2xx, 3xx, 
+
+    range_filters = []
+    explicit_filter = []
+    for filter in filters:
+        if 'xx' in filter:
+            digit = range.replace('xx','')
+            range_start_filters.append(int(digit))
+        else:
+            explicit_filter.append(filter)
+
+    if status in explicit_filter:
+        return True;
+
+    for start_digit in range_filters:
+        if status >= digit * 100 and status < (digit+1) * 100:
+            return True;
+
+
+
+
+
 
 class BaseHandler(webapp2.RequestHandler):
     def handle_exception(self, exception, debug):
@@ -190,7 +270,7 @@ class BaseHandler(webapp2.RequestHandler):
         logging.exception(exception)
 
         # Set a custom message.
-        self.response.write('An error occurred.')
+        self.response.write('An error occurred. %s' % str(exception))
 
         # If the exception is a HTTPException, use its error code.
         # Otherwise use a generic 500 error code.
@@ -213,7 +293,15 @@ class PubSubHandler(BaseHandler):
 
         resp = '%s ROLE: Subscriber   ' % getOwningProject()
         resp += 'subscriptions = %s' % str(subscriptions)
-        self.response.write(resp)
+
+        if len(subscriptions) > 0:
+            filters = get_exclude_filter_matched_to_subscription(subscriptions[0])
+
+
+
+        #self.response.write(resp)
+        self.response.write(filters)
+
 
   
  
@@ -230,7 +318,12 @@ class CronPullFromTopicHandler(BaseHandler):
 
       for subscription in subscriptions:
           logging.info('CronPullFromTopicHandler invoked pulling from subscription %s' % subscription)
-          subscription_pull_messages(subscription)     
+
+          #get any exclude filters
+          exclude_filters = get_exclude_filter_matched_to_subscription(subscription)
+          
+
+          subscription_pull_messages(subscription, exclude_filters)     
       
 
 Subscriptions.init()
