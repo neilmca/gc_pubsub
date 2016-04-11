@@ -133,6 +133,8 @@ def subscription_pull_messages(subscription, exclude_filters):
         'maxMessages': batch_size,
     }
 
+    exclude_filters = get_exclude_filter_matched_to_subscription(subscription)
+    logging.info('exclude filters for subscription = %s'% str(exclude_filters))
     while True:
 
         resp = client.projects().subscriptions().pull(
@@ -144,20 +146,7 @@ def subscription_pull_messages(subscription, exclude_filters):
             for received_message in received_messages:
                 pubsub_message = received_message.get('message')
                 if pubsub_message:
-                    # Process messages
-                    message_id = pubsub_message.get('messageId')
-                    logging.info('received message id = %s' % message_id)
-                    mbody = base64.b64decode(str(pubsub_message.get('data')))
-                    summary = log_summary(mbody)
-                    mbody_aug = PulledMessages.AugmentLoggedJson(mbody, subscription)
-
-                    logging.info('summary = %s' % summary)
-                    log_ts = datetime.datetime.strptime(summary['startTime'], "%Y-%m-%dT%H:%M:%S.%fZ")
-                    ack_ts = datetime.datetime.utcnow()
-                    pubsubReceiveLag = int((ack_ts - log_ts).total_seconds())
-
-                    msg = PulledMessages(messageId = message_id, receivedAckd = ack_ts, body = mbody_aug, log_summary = json.dumps(summary, sort_keys=True, indent=4), subscription = subscription, pubsubReceiveLagSecs = pubsubReceiveLag)
-                    msg.put()
+                    ProcessMessage(pubsub_message, exclude_filters, subscription)
 
                     # Get the message's ack ID
                     ack_ids.append(received_message.get('ackId'))
@@ -171,6 +160,25 @@ def subscription_pull_messages(subscription, exclude_filters):
         else:
             logging.info('received_messages is none')
             break;
+
+def ProcessMessage(pubsub_message, exclude_filters, subscription):
+    # Process messages
+    message_id = pubsub_message.get('messageId')
+    logging.info('received message id = %s' % message_id)
+    mbody = base64.b64decode(str(pubsub_message.get('data')))
+    summary = log_summary(mbody)
+    mbody_aug = PulledMessages.AugmentLoggedJson(mbody, subscription)
+
+    if exclude_if_matches_filter(summary['status'], exclude_filters) == False:
+
+        #dispatch message
+        log_ts = datetime.datetime.strptime(summary['startTime'], "%Y-%m-%dT%H:%M:%S.%fZ")
+        ack_ts = datetime.datetime.utcnow()
+        pubsubReceiveLag = int((ack_ts - log_ts).total_seconds())
+        msg = PulledMessages(messageId = message_id, receivedAckd = ack_ts, body = mbody_aug, log_summary = json.dumps(summary, sort_keys=True, indent=4), subscription = subscription, pubsubReceiveLagSecs = pubsubReceiveLag)
+        msg.put()
+    else:
+        logging.info('not dispatching message = %s as status (%s) is in list of exclude filters' % (message_id, summary['status']))
 
 def log_summary(log_body):
     status = ''
@@ -242,21 +250,38 @@ def exclude_if_matches_filter(status, filters):
 
     #filters can be explicit or a range example = 201, 2xx, 3xx, 
 
+    try:
+        statusi = int(status)
+    except TypeError:
+        return False    
+   
+
     range_filters = []
-    explicit_filter = []
+    explicit_filters = []
     for filter in filters:
         if 'xx' in filter:
-            digit = range.replace('xx','')
-            range_start_filters.append(int(digit))
+            digit = filter.replace('xx','')
+            try:
+                range_filters.append(int(digit))
+            except:
+                pass            
         else:
-            explicit_filter.append(filter)
+            try:
+                explicit_filters.append(int(filter))
+            except:
+                pass             
 
-    if status in explicit_filter:
+    logging.info('range_filters = %s' % str(range_filters))
+    logging.info('explicit_filters = %s' % str(explicit_filters))
+
+    if statusi in explicit_filters:
         return True;
 
     for start_digit in range_filters:
-        if status >= digit * 100 and status < (digit+1) * 100:
+        if statusi >= start_digit * 100 and statusi < (start_digit+1) * 100:
             return True;
+
+    return False
 
 
 
@@ -291,16 +316,20 @@ class PubSubHandler(BaseHandler):
         subscription_project = getOwningProject()      
         subscriptions = list_subscriptions(subscription_project)
 
-        resp = '%s ROLE: Subscriber   ' % getOwningProject()
-        resp += 'subscriptions = %s' % str(subscriptions)
+        resp = '<p>GAE Logs Subscriber'
+        resp += '<p style="text-indent: 2em;">Owning project: %s' % getOwningProject()
+        resp += '<p style="text-indent: 2em;">Role: Subscriber   . Subscriptions....'
 
-        if len(subscriptions) > 0:
-            filters = get_exclude_filter_matched_to_subscription(subscriptions[0])
+        for subs in subscriptions:
+             resp += '<p style="text-indent: 4em;">%s' % subs
+
+        resp += '<p style="text-indent: 2em;">'
+        resp += '<p style="text-indent: 2em;">'
+        
 
 
-
-        #self.response.write(resp)
-        self.response.write(filters)
+        self.response.write(resp)
+        
 
 
   
@@ -337,4 +366,5 @@ app = webapp2.WSGIApplication([
     ('/.*', PubSubHandler)    
     
 ], debug=True)
+
 
