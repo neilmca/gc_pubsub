@@ -17,6 +17,7 @@ from google.appengine.api.app_identity import get_application_id
 from subscriptions import Subscriptions
 import json
 import math
+import sys
 
 #######
 #NOTE: This does not work on devserver
@@ -39,12 +40,14 @@ def buildProjectName(project):
 def buildSubscriptionName(project, topic):
     return project + '___' + topic
 
+def buildDestinationTopic(dest_project, dest_topic):
+    return 'projects/%s/topics/%s' % (dest_project, dest_topic)
+
 
 
 
 
 def create_pubsub_client(http=None):
-    logging.info('create_pubsub_client')
     credentials = oauth2client.GoogleCredentials.get_application_default()
     if credentials.create_scoped_required():
         credentials = credentials.create_scoped(PUBSUB_SCOPES)
@@ -73,13 +76,11 @@ def list_subscriptions(subscription_project):
         # Process each subscription
         if 'subscriptions' in resp:
             for subscription in resp['subscriptions']:
-                logging.info(subscription)
                 subscriptionsList.append(subscription['name'])
             next_page_token = resp.get('nextPageToken')
             if not next_page_token:
                 break
         else:
-            logging.info('subscriptions key not in resp %s' % str(resp))
             break;
 
     return subscriptionsList
@@ -88,7 +89,6 @@ def check_subscription_exists(subscription_project, name):
     s_list = list_subscriptions(subscription_project)
 
     subscriptionName = buildFullSubscriptionName(subscription_project, name)
-    logging.info('check_subscription_exists = %s,  s_list = %s' % (subscriptionName, s_list))
 
     if subscriptionName in s_list:
         return True
@@ -116,9 +116,9 @@ def create_subscription(subscription_project, topic_project, topic, sname):
         name=subscriptionName,
         body=body).execute()
 
-    logging.info('Created: %s' % subscription.get('name'))
+    logging.info('Created subscription: %s' % subscription.get('name'))
 
-def subscription_pull_messages(subscription, exclude_filters):
+def subscription_pull_messages(subscription, exclude_filters, destination_topic):
     client = create_pubsub_client()
 
     # You can fetch multiple messages with a single API call.
@@ -133,7 +133,6 @@ def subscription_pull_messages(subscription, exclude_filters):
         'maxMessages': batch_size,
     }
 
-    exclude_filters = get_exclude_filter_matched_to_subscription(subscription)
     logging.info('exclude filters for subscription = %s'% str(exclude_filters))
     while True:
 
@@ -146,46 +145,55 @@ def subscription_pull_messages(subscription, exclude_filters):
             for received_message in received_messages:
                 pubsub_message = received_message.get('message')
                 if pubsub_message:
-                    ProcessMessage(pubsub_message, exclude_filters, subscription)
+                    if ProcessMessage(pubsub_message, exclude_filters, subscription, destination_topic, client) == True:
+                        # ack the message if it was dispatched ok
+                        ack_ids.append(received_message.get('ackId'))
 
-                    # Get the message's ack ID
-                    ack_ids.append(received_message.get('ackId'))
+            if len(ack_ids) > 0:
+                # Create a POST body for the acknowledge request
+                ack_body = {'ackIds': ack_ids}
 
-            # Create a POST body for the acknowledge request
-            ack_body = {'ackIds': ack_ids}
-
-            # Acknowledge the message.
-            client.projects().subscriptions().acknowledge(
-                subscription=subscription, body=ack_body).execute()
+                # Acknowledge the message.
+                client.projects().subscriptions().acknowledge(
+                    subscription=subscription, body=ack_body).execute()
         else:
             logging.info('received_messages is none')
             break;
 
-def ProcessMessage(pubsub_message, exclude_filters, subscription):
+def ProcessMessage(pubsub_message, exclude_filters, subscription, destination_topic, client):
     # Process messages
     message_id = pubsub_message.get('messageId')
-    logging.info('received message id = %s' % message_id)
     mbody = base64.b64decode(str(pubsub_message.get('data')))
-    summary = log_summary(mbody)
-    mbody_aug = PulledMessages.AugmentLoggedJson(mbody, subscription)
+    summary = log_summary(mbody)    
 
     if exclude_if_matches_filter(summary['status'], exclude_filters) == False:
 
         #dispatch message
+        logging.info('dispatching message = %s' % json.dumps(summary, sort_keys=True, indent=4))
         log_ts = datetime.datetime.strptime(summary['startTime'], "%Y-%m-%dT%H:%M:%S.%fZ")
         ack_ts = datetime.datetime.utcnow()
         pubsubReceiveLag = int((ack_ts - log_ts).total_seconds())
+
+        #publish to destination topic
+        #uncomment after topic set up by Oleksii
+        sent = True
+        #sent = publish_log_to_destination_topic(mbody, destination_topic, client)
+
+        #write to DS
+        mbody_aug = PulledMessages.AugmentLoggedJson(mbody, subscription)
         msg = PulledMessages(messageId = message_id, receivedAckd = ack_ts, body = mbody_aug, log_summary = json.dumps(summary, sort_keys=True, indent=4), subscription = subscription, pubsubReceiveLagSecs = pubsubReceiveLag)
         msg.put()
+
+        return sent
     else:
-        logging.info('not dispatching message = %s as status (%s) is in list of exclude filters' % (message_id, summary['status']))
+        logging.info('not dispatching message from host (%s) as status (%s) is in list of exclude filters' % (summary['host'], summary['status']))
+        return True
 
 def log_summary(log_body):
     status = ''
     method = ''
     startTime = ''
     endTime = ''
-    resource = ''
     host = ''
 
     logJson = json.loads(log_body)   
@@ -199,19 +207,14 @@ def log_summary(log_body):
             startTime = protop['startTime']
         if 'endTime' in protop:
             endTime = protop['endTime']
-        if 'resource' in protop:
-            resource = protop['resource']
         if 'host' in protop:
             host = protop['host']
-     
-       
 
-    log_summary = {'status' : status, 'method' : method, 'startTime' : startTime, 'endTime': endTime, 'resource' : resource, 'host' : host}
+    log_summary = {'status' : status, 'method' : method, 'startTime' : startTime, 'endTime': endTime, 'host' : host}
     return log_summary
 
 def check_and_create_subscriptions():
 
-    logging.info('check_and_create_subscriptions')
     if Subscriptions.IsSubscriptionNameFullySet() == True:
         all = Subscriptions.getSubscriptions()
 
@@ -222,16 +225,15 @@ def check_and_create_subscriptions():
             subscriptionName = buildSubscriptionName(topic_project, topic)
                 
             if not check_subscription_exists(subscription_project, subscriptionName):
-                logging.info('creating subscription (%s) to topic %s' % (subscriptionName, buildTopicName(topic_project, topic)))
+                
                 create_subscription(subscription_project, topic_project, topic, subscriptionName)
 
 
     else:
         logging.info('no subscriptions to set as names not set in Subscriptions datastore')
 
-def get_exclude_filter_matched_to_subscription(fullSubscriptionToMatch):
 
-    #loop through each DS subscriton entry and see if it matches this one
+def get_subscription_dsentry_matched_to_subscription(fullSubscriptionToMatch):
     all = Subscriptions.getSubscriptions()
     for subsDS in all:
         ds_topic_project = subsDS.topic_project
@@ -241,10 +243,9 @@ def get_exclude_filter_matched_to_subscription(fullSubscriptionToMatch):
         fullName = buildFullSubscriptionName(ds_subscription_project, subscriptionName)        
         if fullName == fullSubscriptionToMatch:
             #match
-            filters = subsDS.exclude_filters.encode('utf8').split(",")
-            return filters
+            return subsDS
 
-    return []
+    return None
 
 def exclude_if_matches_filter(status, filters):
 
@@ -271,9 +272,6 @@ def exclude_if_matches_filter(status, filters):
             except:
                 pass             
 
-    logging.info('range_filters = %s' % str(range_filters))
-    logging.info('explicit_filters = %s' % str(explicit_filters))
-
     if statusi in explicit_filters:
         return True;
 
@@ -284,6 +282,28 @@ def exclude_if_matches_filter(status, filters):
     return False
 
 
+def publish_log_to_destination_topic(data, destination_topic, client):
+    msg = base64.urlsafe_b64encode(data)
+    body = {
+        'messages': [
+            {'data': msg},
+        ]
+    }
+
+    try:
+        resp = client.projects().topics().publish(
+            topic=destination_topic, body=body).execute()
+
+        message_ids = resp.get('messageIds')
+        if message_ids:
+            return True
+    except:
+        e = sys.exc_info()[0]
+        logging.info('failed to send message to destination topic %s error = %s' % (destination_topic, str(e)))
+        pass
+
+    
+    return False
 
 
 
@@ -346,13 +366,21 @@ class CronPullFromTopicHandler(BaseHandler):
       subscriptions = list_subscriptions(subscription_project)
 
       for subscription in subscriptions:
-          logging.info('CronPullFromTopicHandler invoked pulling from subscription %s' % subscription)
+          logging.info('CronPullFromTopicHandler invoked pull from subscription %s' % subscription)
 
-          #get any exclude filters
-          exclude_filters = get_exclude_filter_matched_to_subscription(subscription)
+          #find the subscription details for this subscription in the DS
+          subsDS = get_subscription_dsentry_matched_to_subscription(subscription)
           
-
-          subscription_pull_messages(subscription, exclude_filters)     
+          exclude_filters = ''
+          if subsDS !=None:
+            #get any exclude filters
+            exclude_filters = subsDS.exclude_filters.encode('utf8').split(",")
+            #get destination topic
+            destination_topic = buildDestinationTopic(subsDS.destination_project, subsDS.destination_topic)
+            #process messages for this subscription
+            subscription_pull_messages(subscription, exclude_filters, destination_topic)  
+          else:
+            logging.info('Could not find entry in DS matching subscription %s' % subscription)
       
 
 Subscriptions.init()
