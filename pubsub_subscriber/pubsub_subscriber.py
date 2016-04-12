@@ -168,12 +168,7 @@ def ProcessMessage(pubsub_message, exclude_filters, subscription, destination_to
 
     if exclude_if_matches_filter(summary['status'], exclude_filters) == False:
 
-        #dispatch message
         logging.info('dispatching message = %s' % json.dumps(summary, sort_keys=True, indent=4))
-        log_ts = datetime.datetime.strptime(summary['startTime'], "%Y-%m-%dT%H:%M:%S.%fZ")
-        ack_ts = datetime.datetime.utcnow()
-        pubsubReceiveLag = int((ack_ts - log_ts).total_seconds())
-
         #publish to destination topic
         #uncomment after topic set up by Oleksii
         sent = True
@@ -181,7 +176,7 @@ def ProcessMessage(pubsub_message, exclude_filters, subscription, destination_to
 
         #write to DS
         mbody_aug = PulledMessages.AugmentLoggedJson(mbody, subscription)
-        msg = PulledMessages(messageId = message_id, receivedAckd = ack_ts, body = mbody_aug, log_summary = json.dumps(summary, sort_keys=True, indent=4), subscription = subscription, pubsubReceiveLagSecs = pubsubReceiveLag)
+        msg = PulledMessages(messageId = message_id, receivedAckd = datetime.datetime.utcnow(), body = mbody_aug, log_summary = json.dumps(summary, sort_keys=True, indent=4), subscription = subscription, pubsubReceiveLagSecs = summary['pubsubReceiveLagSecs'])
         msg.put()
 
         return sent
@@ -210,7 +205,12 @@ def log_summary(log_body):
         if 'host' in protop:
             host = protop['host']
 
-    log_summary = {'status' : status, 'method' : method, 'startTime' : startTime, 'endTime': endTime, 'host' : host}
+    #record lag between the log and the capture in this job
+    log_ts = datetime.datetime.strptime(startTime, "%Y-%m-%dT%H:%M:%S.%fZ")
+    ack_ts = datetime.datetime.utcnow()
+    pubsubReceiveLag = int((ack_ts - log_ts).total_seconds())
+
+    log_summary = {'status' : status, 'method' : method, 'startTime' : startTime, 'endTime': endTime, 'host' : host, 'pubsubReceiveLagSecs': pubsubReceiveLag}
     return log_summary
 
 def check_and_create_subscriptions():
