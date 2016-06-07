@@ -1,0 +1,1 @@
+python "C:\Program Files (x86)\Google\Cloud SDK\google-cloud-sdk\platform\google_appengine\appcfg.py" --num_days=1 request_logs --application mq-cloud-prototyping --version 2 out.txt --noisy --severity=0
